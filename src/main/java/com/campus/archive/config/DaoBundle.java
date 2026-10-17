@@ -9,8 +9,6 @@ import org.apache.ibatis.session.SqlSession;
  */
 public record DaoBundle(MaterialDao material,
                         CategoryDao category,
-                        TagDao tag,
-                        ScheduleDao schedule,
                         SecurityDao security,
                         ConfigDao config) {
 
@@ -18,8 +16,6 @@ public record DaoBundle(MaterialDao material,
         return new DaoBundle(
                 session.getMapper(MaterialDao.class),
                 session.getMapper(CategoryDao.class),
-                session.getMapper(TagDao.class),
-                session.getMapper(ScheduleDao.class),
                 session.getMapper(SecurityDao.class),
                 session.getMapper(ConfigDao.class));
     }

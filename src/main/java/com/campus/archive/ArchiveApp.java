@@ -2,7 +2,6 @@ package com.campus.archive;
 
 import com.campus.archive.config.AppContext;
 import com.campus.archive.config.DemoDataSeeder;
-import com.campus.archive.entity.Schedule;
 import com.campus.archive.ui.MainWindow;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
@@ -52,17 +51,13 @@ public class ArchiveApp extends Application {
         stage.setScene(scene);
         stage.show();
 
-        ctx.reminderScheduler().start();
-
         if (snapshotDir != null) {
-            prepareReminderForSnapshot(ctx);
-            scheduleSnapshots(stage, ctx);
+            scheduleSnapshots(stage);
         }
     }
 
     @Override
     public void stop() {
-        AppContext.get().reminderScheduler().stop();
         AppContext.get().securityService().lock();
         // 系统托盘观察者会启动 AWT 事件分发线程，它是非守护线程，
         // 不显式退出的话关闭窗口后 JVM 仍会驻留。这里在完成资源清理后主动退出。
@@ -97,20 +92,8 @@ public class ArchiveApp extends Application {
         System.out.println("[启动] 首次运行，已生成演示数据，新增材料 " + n + " 条");
     }
 
-    /** 截图前补一条"已经逾期"的提醒，让首页能真实展示观察者分发的结果。 */
-    private void prepareReminderForSnapshot(AppContext ctx) {
-        if (!ctx.reminderSubject().recentEvents().isEmpty()) return;
-        Schedule s = new Schedule();
-        s.setTitle("提交国家励志奖学金申请材料");
-        s.setDueTime(LocalDateTime.now().minusDays(1));
-        s.setRemindAt(LocalDateTime.now().minusDays(2));
-        s.setRemark("演示截图用");
-        ctx.scheduleService().create(s);
-        ctx.reminderScheduler().scanOnce();
-    }
-
-    private void scheduleSnapshots(Stage stage, AppContext ctx) {
-        String[] keys = {"home", "archive", "schedule", "stats", "settings"};
+    private void scheduleSnapshots(Stage stage) {
+        String[] keys = {"home", "archive", "settings"};
         Timeline tl = new Timeline();
         double t = 1.0;
         for (String key : keys) {

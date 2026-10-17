@@ -180,3 +180,100 @@
     -fx-text-fill: #2f5597;
     -fx-font-size: 12.5px;
 }
+
+
+/* ---------- 首页拖拽上传区 ---------- */
+.drop-card {
+    -fx-padding: 14;
+}
+.drop-area {
+    -fx-border-color: #b9c6da;
+    -fx-border-style: dashed;
+    -fx-border-width: 1.5;
+    -fx-border-radius: 8;
+    -fx-background-color: #f8fafd;
+    -fx-background-radius: 8;
+}
+.drop-hint {
+    -fx-font-size: 15px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #2f5597;
+}
+.drop-card.drop-active .drop-area {
+    -fx-border-color: #2f5597;
+    -fx-background-color: #eaf2ff;
+}
+
+
+/* ---------- 关键词高亮 ---------- */
+.hl {
+    -fx-background-color: #ffe08a;
+    -fx-background-radius: 3;
+    -fx-text-fill: #1f3864;
+    -fx-font-weight: bold;
+    -fx-padding: 0 1 0 1;
+}
+.plain-chunk {
+    -fx-padding: 0;
+    -fx-text-fill: #2b3445;
+}
+/* 选中行里只反白普通片段，黄底高亮保持深色，保证对比度 */
+.table-row-cell:selected .plain-chunk,
+.tree-cell:selected .plain-chunk {
+    -fx-text-fill: #ffffff;
+}
+.table-row-cell:selected .hl,
+.tree-cell:selected .hl {
+    -fx-text-fill: #1f3864;
+}
+
+/* 选中行统一用浅蓝底 + 深色字，避免"浅灰底 + 白字"看不见内容 */
+.tree-cell:selected {
+    -fx-background-color: #eaf2ff;
+}
+
+/* ---------- 首页：桌面 + 浮动窗口 ---------- */
+.desktop-pane {
+    -fx-background-color: #eef1f6;
+    -fx-background-radius: 10;
+    -fx-border-color: #dfe5ee;
+    -fx-border-radius: 10;
+    -fx-padding: 0;
+}
+.module-window {
+    -fx-background-color: #ffffff;
+    -fx-background-radius: 8;
+    -fx-border-color: #dbe3ef;
+    -fx-border-radius: 8;
+    -fx-effect: dropshadow(gaussian, rgba(31,56,100,0.12), 10, 0, 0, 3);
+}
+/* 被点中的窗口：边框加深，表示当前编辑对象 */
+.module-window-selected {
+    -fx-border-color: #2f5597;
+    -fx-border-width: 1.6;
+}
+.window-titlebar {
+    -fx-background-color: #f3f7fd;
+    -fx-background-radius: 8 8 0 0;
+    -fx-padding: 6 10 6 10;
+}
+.window-title {
+    -fx-font-size: 12.5px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #1f3864;
+}
+/* 8 向缩放热区：平时透明，选中窗口后显示为深蓝细条 */
+.resize-handle {
+    -fx-background-color: transparent;
+    -fx-background-radius: 2;
+}
+.module-window-selected .resize-handle {
+    -fx-background-color: #2f5597;
+}
+
+/* 上传窗口：按钮铺满整个窗口（底部圆角与窗口一致） */
+.window-fill-button {
+    -fx-font-size: 19px;
+    -fx-background-radius: 0 0 8 8;
+    -fx-padding: 0;
+}

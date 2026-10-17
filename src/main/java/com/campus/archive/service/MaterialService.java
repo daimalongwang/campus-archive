@@ -1,7 +1,6 @@
 package com.campus.archive.service;
 
 import com.campus.archive.dto.Result;
-import com.campus.archive.dto.Suggestion;
 import com.campus.archive.dto.UploadOptions;
 import com.campus.archive.dto.UploadSummary;
 import com.campus.archive.entity.Material;
@@ -20,8 +19,6 @@ public interface MaterialService {
 
     Result<Void> moveToCategory(String id, String categoryId);
 
-    Result<Void> setTags(String id, String commaSeparatedTags);
-
     /** 普通删除：进入回收站，不物理删除（对应 UR-08）。 */
     Result<Void> softDelete(List<String> ids);
 
@@ -38,14 +35,4 @@ public interface MaterialService {
     Result<Path> materialize(String id);
 
     Result<Void> touchUsed(String id);
-
-    /* ---- 策略模式的对外入口（模式 ①） ---- */
-
-    Suggestion suggest(File file);
-
-    List<String> availableSuggestionStrategies();
-
-    String currentSuggestionStrategy();
-
-    void useSuggestionStrategy(String name);
 }

@@ -17,9 +17,7 @@ public interface MaterialDao {
     String BASE_SELECT = """
             SELECT m.id, m.file_name, m.stored_path, m.file_type, m.file_size, m.content_hash,
                    m.category_id, m.is_private, m.used_at, m.created_at, m.deleted_at,
-                   c.name AS category_name,
-                   (SELECT group_concat(t.name, ' / ') FROM material_tag mt
-                      JOIN tag t ON t.id = mt.tag_id WHERE mt.material_id = m.id) AS tag_text
+                   c.name AS category_name
             FROM material m
             LEFT JOIN category c ON c.id = m.category_id
             """;
@@ -33,19 +31,13 @@ public interface MaterialDao {
               </choose>
               <if test="q.keywordLike != null">
                 AND (m.file_name LIKE #{q.keywordLike}
-                     OR c.name LIKE #{q.keywordLike}
-                     OR EXISTS (SELECT 1 FROM material_tag mt2 JOIN tag t2 ON t2.id = mt2.tag_id
-                                WHERE mt2.material_id = m.id AND t2.name LIKE #{q.keywordLike}))
+                     OR c.name LIKE #{q.keywordLike})
               </if>
               <if test="q.categoryIds != null and q.categoryIds.size() > 0">
                 AND m.category_id IN
                 <foreach collection="q.categoryIds" item="cid" open="(" separator="," close=")">#{cid}</foreach>
               </if>
               <if test="q.fileType != null">AND m.file_type = #{q.fileType}</if>
-              <if test="q.tagLike != null">
-                AND EXISTS (SELECT 1 FROM material_tag mt3 JOIN tag t3 ON t3.id = mt3.tag_id
-                            WHERE mt3.material_id = m.id AND t3.name LIKE #{q.tagLike})
-              </if>
               <if test="q.onlyPrivate != null and q.onlyPrivate">AND m.is_private = 1</if>
               <if test="q.onlyPrivate != null and q.onlyPrivate == false">AND m.is_private = 0</if>
               <if test="q.createdFrom != null">AND m.created_at &gt;= #{q.createdFrom}</if>
@@ -151,8 +143,6 @@ public interface MaterialDao {
 
     /* ---- 永久删除时的级联清理 ---- */
 
-    @Delete("DELETE FROM material_tag WHERE material_id = #{materialId}")
-    int deleteTagLinks(@Param("materialId") String materialId);
 
     @Delete("DELETE FROM vault_entry WHERE material_id = #{materialId}")
     int deleteVaultEntry(@Param("materialId") String materialId);

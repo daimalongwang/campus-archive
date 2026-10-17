@@ -6,11 +6,8 @@ import com.campus.archive.dto.ExportResult;
 import com.campus.archive.dto.Result;
 import com.campus.archive.entity.FileType;
 import com.campus.archive.entity.Material;
-import com.campus.archive.entity.Schedule;
-import com.campus.archive.entity.ScheduleStatus;
 import com.campus.archive.infra.CryptoUtil;
 import com.campus.archive.infra.FileStore;
-import com.campus.archive.infra.LocalDateTimeTypeHandler;
 import com.campus.archive.infra.MiniJson;
 import com.campus.archive.pattern.export.ArchiveExporter;
 import com.campus.archive.pattern.export.ExportException;
@@ -65,7 +62,6 @@ public class BackupServiceImpl implements BackupService {
 
         Map<String, byte[]> payloads = new LinkedHashMap<>();
         String manifestJson;
-        String scheduleJson = null;
         try {
             manifestJson = readArchive(packagePath, payloads);
         } catch (IOException e) {
@@ -88,10 +84,10 @@ public class BackupServiceImpl implements BackupService {
         // ---- 第一步：把文件落到磁盘，并准备好待插入的元数据 ----
         List<Path> written = new ArrayList<>();
         List<Material> materials = new ArrayList<>();
-        List<Schedule> schedules = new ArrayList<>();
         try {
             for (Map.Entry<String, byte[]> e : payloads.entrySet()) {
                 String displayName = e.getKey();
+                // 旧版本备份包可能含 schedule.json，日程功能已移除，忽略该条目
                 if ("schedule.json".equals(displayName)) continue;
                 byte[] content = e.getValue();
 
@@ -106,13 +102,6 @@ public class BackupServiceImpl implements BackupService {
                 m.setCreatedAt(LocalDateTime.now());
                 materials.add(m);
             }
-            String schedulePayload = scheduleJson != null
-                    ? scheduleJson
-                    : (payloads.containsKey("schedule.json")
-                        ? new String(payloads.get("schedule.json"), StandardCharsets.UTF_8) : null);
-            if (schedulePayload != null) {
-                parseSchedules(schedulePayload, schedules);
-            }
         } catch (IOException | RuntimeException ex) {
             cleanup(written);
             return Result.fail("E500", "备份内容写入失败：" + ex.getMessage());
@@ -122,7 +111,6 @@ public class BackupServiceImpl implements BackupService {
         try {
             repos.tx(d -> {
                 for (Material m : materials) d.material().insert(m);
-                for (Schedule s : schedules) d.schedule().insert(s);
                 return null;
             });
         } catch (RuntimeException ex) {
@@ -130,7 +118,7 @@ public class BackupServiceImpl implements BackupService {
             return Result.fail("E501", "导入失败，已回滚，原有数据未受影响");
         }
 
-        return Result.ok("导入完成：新增材料 " + materials.size() + " 个，日程 " + schedules.size() + " 条");
+        return Result.ok("导入完成：新增材料 " + materials.size() + " 个");
     }
 
     /** 读取压缩包，返回 manifest 内容并把其余条目放入 payloads。 */
@@ -151,22 +139,6 @@ public class BackupServiceImpl implements BackupService {
         return manifest;
     }
 
-    private void parseSchedules(String json, List<Schedule> out) {
-        for (Object o : MiniJson.parseArray(json)) {
-            if (!(o instanceof Map<?, ?> row)) continue;
-            Schedule s = new Schedule();
-            s.setId(UUID.randomUUID().toString());
-            s.setTitle(str(row.get("title")));
-            s.setDueTime(parseTime(str(row.get("dueTime"))));
-            s.setRemindAt(parseTime(str(row.get("remindAt"))));
-            s.setStatus(parseStatus(str(row.get("status"))));
-            s.setRemark(str(row.get("remark")));
-            s.setReminded(false);
-            if (s.getTitle().isBlank() || s.getDueTime() == null) continue;
-            out.add(s);
-        }
-    }
-
     private void cleanup(List<Path> written) {
         for (Path p : written) {
             try {
@@ -174,27 +146,6 @@ public class BackupServiceImpl implements BackupService {
             } catch (IOException ignored) {
                 // 清理失败只影响磁盘占用，不影响数据一致性
             }
-        }
-    }
-
-    private static String str(Object o) {
-        return o == null ? "" : String.valueOf(o);
-    }
-
-    private static LocalDateTime parseTime(String raw) {
-        if (raw == null || raw.isBlank()) return null;
-        try {
-            return LocalDateTimeTypeHandler.parse(raw);
-        } catch (RuntimeException e) {
-            return null;
-        }
-    }
-
-    private static ScheduleStatus parseStatus(String raw) {
-        try {
-            return ScheduleStatus.valueOf(raw);
-        } catch (RuntimeException e) {
-            return ScheduleStatus.PENDING;
         }
     }
 }

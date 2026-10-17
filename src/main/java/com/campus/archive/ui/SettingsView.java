@@ -3,7 +3,6 @@ package com.campus.archive.ui;
 import com.campus.archive.config.AppContext;
 import com.campus.archive.dto.ExportResult;
 import com.campus.archive.dto.Result;
-import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
@@ -14,17 +13,17 @@ import java.io.File;
 import java.nio.file.Path;
 
 /**
- * 我的：低频功能集中管理——安全设置、导入导出、回收站入口，以及设计模式应用的现场自证面板。
+ * 我的：低频功能集中管理——安全设置与导入导出。
  */
 public class SettingsView extends VBox implements MainWindow.Refreshable {
 
     private final AppContext ctx;
+    private final MainWindow window;
     private final Label securityStatus = UiKit.label("", "muted");
-    private final Label dataPath = UiKit.label("", "muted");
-    private final Label patternPanel = UiKit.label("", "muted");
 
-    public SettingsView(AppContext ctx) {
+    public SettingsView(AppContext ctx, MainWindow window) {
         this.ctx = ctx;
+        this.window = window;
         getStyleClass().add("content");
         setSpacing(14);
         build();
@@ -32,18 +31,14 @@ public class SettingsView extends VBox implements MainWindow.Refreshable {
     }
 
     private void build() {
-        getChildren().addAll(securityCard(), dataCard(), backupCard(), patternCard());
+        getChildren().addAll(securityCard(), backupCard(), layoutCard());
     }
 
     private VBox securityCard() {
         Button init = new Button("设置 / 验证安全密钥");
         init.getStyleClass().addAll("button", "primary-button");
         init.setOnAction(e -> {
-            if (ctx.securityService().isEnabled()) {
-                PrivateUnlockDialog.ensureUnlocked(ctx);
-            } else {
-                PrivateUnlockDialog.ensureUnlocked(ctx);
-            }
+            PrivateUnlockDialog.ensureUnlocked(ctx);
             refresh();
         });
 
@@ -65,15 +60,6 @@ public class SettingsView extends VBox implements MainWindow.Refreshable {
         return box;
     }
 
-    private VBox dataCard() {
-        dataPath.getStyleClass().add("code-area");
-        VBox box = new VBox(8, UiKit.label("数据位置", "card-title"), dataPath,
-                UiKit.label("无登录体系意味着数据完全属于用户本人；请通过下方备份功能定期导出，"
-                        + "并在更换设备时导入。", "muted"));
-        box.getStyleClass().add("card");
-        return box;
-    }
-
     private VBox backupCard() {
         Button export = new Button("导出完整档案备份");
         export.getStyleClass().addAll("button", "primary-button");
@@ -87,45 +73,32 @@ public class SettingsView extends VBox implements MainWindow.Refreshable {
         actions.setAlignment(Pos.CENTER_LEFT);
 
         VBox box = new VBox(8, UiKit.label("导入 / 导出与备份", "card-title"), actions,
-                UiKit.label("备份包内含全部材料文件、schedule.json（日程）与 manifest.json（清单，含 SHA-256 校验和）。"
+                UiKit.label("备份包内含全部材料文件与 manifest.json（清单，含 SHA-256 校验和）。"
                         + "导入采用单事务，失败会整体回滚并清理已写入的文件。", "muted"));
         box.getStyleClass().add("card");
         return box;
     }
 
-    private VBox patternCard() {
-        patternPanel.setWrapText(true);
-        Button demoStrategy = new Button("演示：切换归类建议策略");
-        demoStrategy.getStyleClass().addAll("button", "ghost-button");
-        demoStrategy.setOnAction(e -> {
-            var list = ctx.materialService().availableSuggestionStrategies();
-            ChoiceDialog<String> d = new ChoiceDialog<>(ctx.materialService().currentSuggestionStrategy(), list);
-            d.setTitle("策略模式①");
-            d.setHeaderText("运行期替换归类建议算法");
-            d.setContentText("选择策略（不需要重启，也不改动业务代码）");
-            d.showAndWait().ifPresent(name -> {
-                ctx.materialService().useSuggestionStrategy(name);
-                UiKit.info("已切换为：" + ctx.materialService().currentSuggestionStrategy()
-                        + "\n下次上传时，建议结果将由新算法产生。");
-                refresh();
-            });
+    /** 个性化：调整首页模块顺序与尺寸，并可一键恢复默认。 */
+    private VBox layoutCard() {
+        Button edit = new Button("调整布局");
+        edit.getStyleClass().addAll("button", "primary-button");
+        edit.setOnAction(e -> window.beginLayoutEdit());
+
+        Button reset = new Button("恢复默认布局");
+        reset.getStyleClass().addAll("button", "ghost-button");
+        reset.setOnAction(e -> {
+            LayoutPlan.defaults().save(ctx.repos());
+            window.reloadHomeLayout();
+            UiKit.info("首页布局已恢复默认");
         });
 
-        Button demoReminder = new Button("演示：触发一次观察者分发");
-        demoReminder.getStyleClass().addAll("button", "ghost-button");
-        demoReminder.setOnAction(e -> {
-            int n = ctx.reminderScheduler().scanOnce();
-            UiKit.info("已触发提醒扫描，命中 " + n + " 条。\n"
-                    + "事件同时送达：" + ctx.reminderSubject().observers().stream()
-                    .map(o -> o.name()).reduce((a, b) -> a + "、 " + b).orElse("无")
-                    + (n == 0 ? "\n\n（没有到期事项，可在日程页新建一条提醒时间为 1 分钟后的日程再试）" : ""));
-        });
-
-        HBox actions = new HBox(8, demoStrategy, demoReminder);
+        HBox actions = new HBox(8, edit, reset);
         actions.setAlignment(Pos.CENTER_LEFT);
 
-        VBox box = new VBox(8, UiKit.label("设计模式应用（现场自证）", "card-title"),
-                patternPanel, actions);
+        VBox box = new VBox(8, UiKit.label("个性化布局", "card-title"), actions,
+                UiKit.label("首页采用窗口式布局：拖动标题栏移动、拖动边框改变大小、点中窗口置顶，"
+                        + "编辑后点「保存」立即生效；随时可以恢复默认。", "muted"));
         box.getStyleClass().add("card");
         return box;
     }
@@ -136,19 +109,6 @@ public class SettingsView extends VBox implements MainWindow.Refreshable {
         boolean unlocked = ctx.securityService().isUnlocked();
         securityStatus.setText("状态：" + (enabled ? (unlocked ? "已设置密钥，当前【已解锁】" : "已设置密钥，当前【已锁定】") : "尚未启用")
                 + (enabled ? "　连续验证失败次数：" + ctx.securityService().failCount() : ""));
-
-        dataPath.setText("应用数据目录：" + ctx.database().home()
-                + "\n数据库文件　：" + ctx.database().dbFile()
-                + "\n原始材料仓库：files/　私密密文区：vault/　备份输出：backup/");
-
-        patternPanel.setText(
-                "① 策略模式（归类建议）：SuggestionEngine 持有 CategorySuggestionStrategy，当前策略 = "
-                        + ctx.materialService().currentSuggestionStrategy() + "\n"
-                        + "② 模板方法模式（导出/备份）：AbstractArchiveExporter.export() 固定流程骨架，"
-                        + "具体实现 = SelectionExportExporter（选定材料导出）、FullBackupExporter（全量备份）\n"
-                        + "③ 观察者模式（日程提醒）：ReminderSubject 当前注册 " + ctx.reminderSubject().observerCount()
-                        + " 个观察者 = " + ctx.reminderSubject().observers().stream()
-                        .map(o -> o.name()).reduce((a, b) -> a + "、 " + b).orElse("无"));
     }
 
     private void onExport() {

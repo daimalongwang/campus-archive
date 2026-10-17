@@ -4,7 +4,6 @@ import com.campus.archive.dto.ExportItem;
 import com.campus.archive.dto.ExportRequest;
 import com.campus.archive.dto.ExportResult;
 import com.campus.archive.entity.Material;
-import com.campus.archive.entity.Schedule;
 import com.campus.archive.pattern.export.*;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -86,7 +85,6 @@ class ExportTemplateTest {
         return new ExportContext(
                 id -> null,
                 query -> List.of(),
-                List::of,
                 () -> unlocked,
                 item -> Files.readAllBytes(sourceFile));
     }
@@ -164,14 +162,9 @@ class ExportTemplateTest {
         Material m = new Material("证书.pdf", dir.resolve("cert.pdf").toString(), null, 10, "hash");
         m.setId("m-1");
 
-        Schedule s = new Schedule();
-        s.setTitle("四级报名");
-        s.setDueTime(java.time.LocalDateTime.now().plusDays(3));
-
         ExportContext ctx = new ExportContext(
                 id -> "m-1".equals(id) ? m : null,
                 query -> List.of(m),
-                () -> List.of(s),
                 () -> true,
                 i -> "content".getBytes(StandardCharsets.UTF_8));
 
@@ -182,12 +175,9 @@ class ExportTemplateTest {
 
         ExportResult backupResult = new FullBackupExporter(ctx)
                 .export(ExportRequest.ofFullBackup(dir, false));
-        // 备份比选定导出多一个 schedule.json 虚拟条目
-        assertEquals(2, backupResult.fileCount());
+        assertEquals(1, backupResult.fileCount());
         String backupManifest = readEntry(backupResult.packagePath(), "manifest.json");
         assertTrue(backupManifest.contains("\"kind\": \"backup\""));
-        assertTrue(backupManifest.contains("\"scheduleCount\": 1"));
-        assertNotNull(readEntry(backupResult.packagePath(), "schedule.json"));
     }
 
     @Test
@@ -204,7 +194,6 @@ class ExportTemplateTest {
         SelectionExportExporter exporter = new SelectionExportExporter(new ExportContext(
                 id -> privateMaterial,
                 query -> List.of(),
-                List::of,
                 () -> false,                       // 私密空间锁定
                 i -> Files.readAllBytes(src)));
 
@@ -228,7 +217,7 @@ class ExportTemplateTest {
                 new ExportItem("m-2", "missing.txt", dir.resolve("missing.txt").toString(), 5, false));
 
         StubExporter exporter = new StubExporter(new ExportContext(
-                id -> null, q -> List.of(), List::of, () -> true,
+                id -> null, q -> List.of(), () -> true,
                 i -> Files.readAllBytes(Path.of(i.storedPath()))), items);
 
         ExportResult r = exporter.export(ExportRequest.ofFullBackup(dir, false));

@@ -114,8 +114,6 @@ public final class Database {
         cfg.getTypeHandlerRegistry().register(LocalDateTime.class, new LocalDateTimeTypeHandler());
         cfg.addMapper(CategoryDao.class);
         cfg.addMapper(MaterialDao.class);
-        cfg.addMapper(TagDao.class);
-        cfg.addMapper(ScheduleDao.class);
         cfg.addMapper(SecurityDao.class);
         cfg.addMapper(ConfigDao.class);
         return new SqlSessionFactoryBuilder().build(cfg);

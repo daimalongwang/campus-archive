@@ -1,6 +1,5 @@
 package com.campus.archive.config;
 
-import com.campus.archive.entity.Schedule;
 
 import java.io.File;
 import java.io.IOException;
@@ -8,7 +7,6 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -53,7 +51,6 @@ public final class DemoDataSeeder {
             }
 
             seedSubCategories(ctx);
-            seedSchedules(ctx);
 
         } catch (IOException e) {
             System.err.println("[演示数据] 生成失败：" + e.getMessage());
@@ -112,36 +109,10 @@ public final class DemoDataSeeder {
         return target.toFile();
     }
 
-    private static int seedSchedules(AppContext ctx) {
-        LocalDateTime now = LocalDateTime.now();
-
-        Schedule due = new Schedule();
-        due.setTitle("提交综合测评材料");
-        due.setDueTime(now.plusMinutes(2));
-        due.setRemindAt(now.plusSeconds(20));
-        due.setRemark("演示用：20 秒后触发提醒，用于现场展示观察者模式");
-        ctx.scheduleService().create(due);
-
-        Schedule cet = new Schedule();
-        cet.setTitle("英语四级笔试报名截止");
-        cet.setDueTime(now.plusDays(12));
-        cet.setRemindAt(now.plusDays(10));
-        cet.setRemark("报名入口：中国教育考试网");
-        ctx.scheduleService().create(cet);
-
-        Schedule scholarship = new Schedule();
-        scholarship.setTitle("国家励志奖学金材料提交");
-        scholarship.setDueTime(now.plusDays(25));
-        scholarship.setRemindAt(now.plusDays(22));
-        ctx.scheduleService().create(scholarship);
-
-        return 3;
-    }
-
     /** 上传选项的小包装，避免在循环里反复 new。 */
     private record UploadOptionsHolder(com.campus.archive.dto.UploadOptions options) {
         UploadOptionsHolder() {
-            this(new com.campus.archive.dto.UploadOptions().setSuggestCategory(true));
+            this(new com.campus.archive.dto.UploadOptions());
         }
     }
 }

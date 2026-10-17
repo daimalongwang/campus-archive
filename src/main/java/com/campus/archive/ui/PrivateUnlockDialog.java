@@ -51,6 +51,7 @@ public final class PrivateUnlockDialog {
         box.setPadding(new Insets(6, 4, 4, 4));
         box.setAlignment(Pos.CENTER_LEFT);
         d.getDialogPane().setContent(box);
+        UiKit.styleDialog(d);
         ButtonType ok = new ButtonType("设置并解锁", ButtonBar.ButtonData.OK_DONE);
         d.getDialogPane().getButtonTypes().addAll(ok, ButtonType.CANCEL);
 
@@ -85,6 +86,7 @@ public final class PrivateUnlockDialog {
         VBox box = new VBox(10, p, err);
         box.setPadding(new Insets(6, 4, 4, 4));
         d.getDialogPane().setContent(box);
+        UiKit.styleDialog(d);
         ButtonType ok = new ButtonType("解锁", ButtonBar.ButtonData.OK_DONE);
         d.getDialogPane().getButtonTypes().addAll(ok, ButtonType.CANCEL);
 

@@ -35,18 +35,53 @@ class MaterialServiceTest {
     }
 
     @Test
-    @DisplayName("上传后材料进入档案，并按关键词规则自动归类")
-    void uploadAppliesSuggestionStrategy() {
+    @DisplayName("上传后材料进入档案；未指定分类时落入兜底分类「其他」")
+    void uploadFallsBackToDefaultCategory() {
         Result<UploadSummary> r = ctx.materialService().upload(
-                List.of(file("大学英语四级成绩报告单.pdf", "cet4 content")), new UploadOptions());
+                List.of(file("大学英语四级成绩报告单.png", "cet4 content")), new UploadOptions());
 
         assertTrue(r.isSuccess());
         assertEquals(1, r.getData().getSuccessCount());
 
         Material m = ctx.searchService().search(new MaterialQuery().setKeyword("四级"), 1, 10).items().get(0);
-        assertEquals("证书", m.getCategoryName(), "策略模式①应把「四级」归到证书分类");
+        assertEquals("其他", m.getCategoryName(), "未指定分类时应落入兜底分类");
         assertEquals(64, m.getContentHash().length());
         assertFalse(m.getIsPrivate());
+    }
+
+    @Test
+    @DisplayName("锁定时排除私密材料；解锁后私密与普通材料一起显示")
+    void privateMaterialsHiddenWhenLockedAndMixedWhenUnlocked() {
+        AppContext priv = TestEnv.newContext("material-private");
+        priv.securityService().initKey("viewKey123".toCharArray());
+        priv.materialService().upload(List.of(
+                TestEnv.sample(staging, "私密视图测试.pdf", "secret body"),
+                TestEnv.sample(staging, "普通视图测试.pdf", "plain body")), new UploadOptions());
+
+        Material secret = priv.searchService()
+                .search(new MaterialQuery().setKeyword("私密视图"), 1, 5).items().get(0);
+        assertTrue(priv.securityService().markPrivate(secret.getId()).isSuccess());
+        priv.securityService().lock();
+
+        assertEquals(1, priv.searchService().search(new MaterialQuery().setOnlyPrivate(false), 1, 50).total(),
+                "锁定状态只应看到非私密材料");
+        assertEquals(2, priv.searchService().search(new MaterialQuery(), 1, 50).total(),
+                "解锁后不过滤，私密与普通材料一起显示");
+    }
+
+    @Test
+    @DisplayName("显式指定分类时，材料直接进入该分类")
+    void uploadIntoExplicitCategory() {
+        String certId = ctx.categoryService().listAll().stream()
+                .filter(c -> "证书".equals(c.getName())).findFirst().orElseThrow().getId();
+
+        Result<UploadSummary> r = ctx.materialService().upload(
+                List.of(file("分类落位测试材料.pdf", "placement content")),
+                new UploadOptions().setCategoryId(certId));
+
+        assertTrue(r.isSuccess(), r.getMessage());
+        Material m = ctx.searchService().search(new MaterialQuery().setKeyword("落位测试"), 1, 10).items().get(0);
+        assertEquals("证书", m.getCategoryName());
     }
 
     @Test
@@ -87,19 +122,6 @@ class MaterialServiceTest {
     /** 把常量集中到这里，避免测试直接依赖实现类名。 */
     private static final class MaterialServiceImplLimits {
         static final long MAX_FILE_SIZE = com.campus.archive.service.impl.MaterialServiceImpl.MAX_FILE_SIZE;
-    }
-
-    @Test
-    @DisplayName("标签可以编辑并按标签检索")
-    void tagsCanBeEditedAndSearched() {
-        ctx.materialService().upload(List.of(file("数学建模竞赛证书.pdf", "mcm")), new UploadOptions());
-        Material m = ctx.searchService().search(new MaterialQuery().setKeyword("数学建模"), 1, 5).items().get(0);
-
-        assertTrue(ctx.materialService().setTags(m.getId(), "竞赛, 保研, 数学").isSuccess());
-
-        List<Material> byTag = ctx.searchService().search(new MaterialQuery().setTag("保研"), 1, 10).items();
-        assertEquals(1, byTag.size());
-        assertTrue(byTag.get(0).getTagText().contains("竞赛"));
     }
 
     @Test

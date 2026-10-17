@@ -22,7 +22,6 @@ public class Material {
 
     // 展示用关联字段（不落库）
     private String categoryName;
-    private String tagText;
 
     public Material() {
     }
@@ -82,8 +81,6 @@ public class Material {
     public String getCategoryName() { return categoryName; }
     public void setCategoryName(String categoryName) { this.categoryName = categoryName; }
 
-    public String getTagText() { return tagText; }
-    public void setTagText(String tagText) { this.tagText = tagText; }
 
     @Override
     public String toString() {

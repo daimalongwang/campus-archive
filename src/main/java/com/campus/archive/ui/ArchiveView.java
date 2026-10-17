@@ -12,10 +12,20 @@ import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.control.*;
+import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.DataFormat;
+import javafx.scene.input.DragEvent;
+import javafx.scene.input.Dragboard;
+import javafx.scene.input.TransferMode;
+import javafx.scene.Group;
+import javafx.scene.Scene;
+import javafx.scene.SnapshotParameters;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.*;
+import javafx.scene.paint.Color;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.FileChooser;
 
@@ -24,12 +34,15 @@ import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 我的档案：分类 / 标签 / 类型组合筛选 + 材料列表 + 生命周期操作。
+ * 我的档案：分类 / 类型组合筛选 + 材料列表 + 生命周期操作。
  * 私密材料在未解锁时一律显示为「🔒 已加密」且不可预览（对应 AC-04）。
  */
 public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
@@ -42,15 +55,21 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
     private final AppContext ctx;
     private final TreeView<Category> categoryTree = new TreeView<>();
     private final ComboBox<String> typeFilter = new ComboBox<>();
-    private final CheckBox privateOnly = new CheckBox("只看私密材料");
+    private final CheckBox privateOnly = new CheckBox("查看私密材料");
     private final TextField keywordField = new TextField();
+    private final TextField categoryKeywordField = new TextField();
+    /** 拖拽载荷格式：材料 ID 列表。用自定义格式，避免从外部拖入的文字误触发。 */
+    private static final DataFormat MATERIAL_IDS = new DataFormat("application/x-campus-material-ids");
+    /** 当前被高亮的投放目标行，拖拽离开时复原。 */
+    private TreeCell<Category> dropHighlight;
+    /** 分类 ID → 分类，用于按 parentId 链计算层级（比读 TreeItem 稳定）。 */
+    private final Map<String, Category> categoryIndex = new LinkedHashMap<>();
     private final TableView<Material> table = new TableView<>();
     private final Label statusLabel = UiKit.label("", "muted");
 
     // 需要随"当前是不是回收站"切换状态的按钮
     private final Button renameBtn = new Button();
     private final Button moveBtn = new Button();
-    private final Button tagBtn = new Button();
     private final Button privateBtn = new Button();
     private final Button restoreBtn = new Button();
     private final Button deleteBtn = new Button();
@@ -74,16 +93,34 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
             @Override
             protected void updateItem(Category item, boolean empty) {
                 super.updateItem(item, empty);
-                setText(empty || item == null ? null : item.getName());
-                // 回收站那一项用醒目一点的颜色，和真实分类区分开
-                setStyle(!empty && item != null && TRASH_ID.equals(item.getId())
-                        ? "-fx-text-fill:#c0392b; -fx-font-weight:bold;" : "");
+                if (empty || item == null) {
+                    setText(null);
+                    setGraphic(null);
+                    setStyle("");
+                    return;
+                }
+                int depth = depthOf(item);
+                String kw = categoryKeywordField.getText();
+                boolean hit = kw != null && !kw.isBlank()
+                        && item.getName().toLowerCase().contains(kw.trim().toLowerCase());
+
+                // 用 setText 而不是 setGraphic：文字交给 skin 绘制，选中态永远正常
+                setText(UiKit.depthText(depth, item.getName()));
+                setGraphic(null);
+
+                StringBuilder style = new StringBuilder("-fx-text-fill:").append(UiKit.depthColor(depth)).append(';');
+                if (hit) style.append("-fx-font-weight:bold;");
+                if (TRASH_ID.equals(item.getId())) style.append("-fx-text-fill:#c0392b; -fx-font-weight:bold;");
+                setStyle(style.toString());
             }
         });
         categoryTree.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> {
             updateActionState();
             reload();
         });
+        categoryKeywordField.setPromptText("搜索分类名…");
+        categoryKeywordField.textProperty().addListener((o, a, b) -> rebuildTree());
+
         installCategoryContextMenu();
 
         typeFilter.getItems().add("全部类型");
@@ -91,9 +128,9 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
         typeFilter.getSelectionModel().selectFirst();
         typeFilter.setOnAction(e -> reload());
 
-        privateOnly.setOnAction(e -> reload());
+        privateOnly.setOnAction(e -> onTogglePrivateView());
 
-        keywordField.setPromptText("搜索全库文件名、分类或标签…");
+        keywordField.setPromptText("搜索全库文件名或分类…");
         keywordField.setOnAction(e -> reload());
 
         refreshBtn.getStyleClass().addAll("button", "ghost-button");
@@ -103,8 +140,9 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
         clear.getStyleClass().addAll("button", "ghost-button");
         clear.setOnAction(e -> {
             keywordField.clear();
+            categoryKeywordField.clear();
             typeFilter.getSelectionModel().selectFirst();
-            privateOnly.setSelected(false);
+            exitPrivateView();
             selectTreeNode(ALL_ID);
             reload();
         });
@@ -122,6 +160,7 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
 
         VBox filters = new VBox(10,
                 UiKit.label("我的档案", "card-title"),
+                categoryKeywordField,
                 UiKit.label("分类（右键可新建/重命名/删除）", "muted"), categoryTree, catOps,
                 UiKit.label("类型", "muted"), typeFilter,
                 privateOnly, clear);
@@ -133,6 +172,25 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
         nameCol.setCellValueFactory(c -> new SimpleStringProperty(
                 c.getValue().getIsPrivate() ? "🔒 " + c.getValue().getFileName() : c.getValue().getFileName()));
         nameCol.setPrefWidth(260);
+        nameCol.setCellFactory(col -> new TableCell<>() {
+            @Override
+            protected void updateItem(String name, boolean empty) {
+                super.updateItem(name, empty);
+                if (empty || name == null) {
+                    setText(null);
+                    setGraphic(null);
+                    return;
+                }
+                String kw = keywordField.getText();
+                if (kw == null || kw.isBlank()) {
+                    setText(name);
+                    setGraphic(null);
+                } else {
+                    setText(null);
+                    setGraphic(UiKit.highlight(name, kw));
+                }
+            }
+        });
 
         TableColumn<Material, String> catCol = new TableColumn<>("分类");
         catCol.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().getCategoryName()));
@@ -146,19 +204,15 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
         sizeCol.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().sizeText()));
         sizeCol.setPrefWidth(70);
 
-        TableColumn<Material, String> tagCol = new TableColumn<>("标签");
-        tagCol.setCellValueFactory(c -> new SimpleStringProperty(
-                c.getValue().getTagText() == null ? "" : c.getValue().getTagText()));
-        tagCol.setPrefWidth(140);
-
         TableColumn<Material, String> timeCol = new TableColumn<>("上传时间");
         timeCol.setCellValueFactory(c -> new SimpleStringProperty(UiKit.fmt(c.getValue().getCreatedAt())));
         timeCol.setPrefWidth(130);
 
-        table.getColumns().setAll(List.of(nameCol, catCol, typeCol, sizeCol, tagCol, timeCol));
+        table.getColumns().setAll(List.of(nameCol, catCol, typeCol, sizeCol, timeCol));
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
         table.setPlaceholder(UiKit.label("没有符合条件的材料", "muted"));
         table.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
+        installDragToCategory();
 
         // ---------------- 操作按钮 ----------------
         Button preview = action("预览 / 下载", this::onPreview);
@@ -172,10 +226,6 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
         moveBtn.getStyleClass().addAll("button", "ghost-button");
         moveBtn.setOnAction(e -> onMove());
 
-        tagBtn.setText("编辑标签");
-        tagBtn.getStyleClass().addAll("button", "ghost-button");
-        tagBtn.setOnAction(e -> onTags());
-
         privateBtn.setText("设为私密 / 取消");
         privateBtn.getStyleClass().addAll("button", "ghost-button");
         privateBtn.setOnAction(e -> onTogglePrivate());
@@ -188,7 +238,7 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
         deleteBtn.getStyleClass().addAll("button", "ghost-button");
         deleteBtn.setOnAction(e -> onDelete());
 
-        HBox actions = new HBox(8, preview, export, renameBtn, moveBtn, tagBtn, privateBtn, restoreBtn, deleteBtn);
+        HBox actions = new HBox(8, preview, export, renameBtn, moveBtn, privateBtn, restoreBtn, deleteBtn);
         actions.setAlignment(Pos.CENTER_LEFT);
         actions.setPadding(new Insets(10, 0, 0, 0));
 
@@ -225,6 +275,10 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
 
     @Override
     public void refresh() {
+        // 每次进入/刷新档案页都与密钥状态对齐：未解锁就不允许停留在私密视图
+        if (privateOnly.isSelected() && !ctx.securityService().isUnlocked()) {
+            privateOnly.setSelected(false);
+        }
         rebuildTree();
         reload();
     }
@@ -243,8 +297,10 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
 
         List<Category> flat = ctx.categoryService().listAll();
         Map<String, TreeItem<Category>> nodes = new LinkedHashMap<>();
+        categoryIndex.clear();
         for (Category c : flat) {
             nodes.put(c.getId(), new TreeItem<>(c));
+            categoryIndex.put(c.getId(), c);
         }
 
         TreeItem<Category> root = new TreeItem<>(new Category(ALL_ID, "全部分类", 0));
@@ -259,9 +315,12 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
 
         int trashCount = ctx.materialService().listTrashed().size();
         root.getChildren().add(new TreeItem<>(new Category(TRASH_ID, "🗑 回收站 (" + trashCount + ")", 999)));
+        applyCategoryFilter(root);
 
         categoryTree.setRoot(root);
         selectTreeNode(keepId == null ? ALL_ID : keepId);
+        // 换根后可见单元格可能仍是旧实例，强制重走一遍 updateItem，避免选中行渲染成空白
+        categoryTree.refresh();
         updateActionState();
     }
 
@@ -280,6 +339,77 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
             if (hit != null) return hit;
         }
         return null;
+    }
+
+    /**
+     * 分类搜索：仅保留名称命中的节点及其祖先。
+     * 当前选中的分支始终保留，避免输入关键字时"选中项凭空消失、材料范围被悄悄改掉"。
+     */
+    private void applyCategoryFilter(TreeItem<Category> root) {
+        String kw = categoryKeywordField.getText() == null ? "" : categoryKeywordField.getText().trim().toLowerCase();
+        if (kw.isEmpty()) return;
+
+        Set<String> keepIds = selectionPathIds(root, selectedNodeId());
+        for (Iterator<TreeItem<Category>> it = root.getChildren().iterator(); it.hasNext(); ) {
+            if (!prune(it.next(), kw, keepIds)) it.remove();
+        }
+        expandAll(root);
+    }
+
+    private boolean prune(TreeItem<Category> node, String kw, Set<String> keepIds) {
+        Category c = node.getValue();
+        boolean selfMatch = c != null && c.getName().toLowerCase().contains(kw);
+        // 命中的文件夹保留整棵子树：搜到「英语等级」时，它下面的「四级/六级」应当一起可见
+        if (selfMatch) return true;
+
+        boolean selfKeep = c != null && keepIds.contains(c.getId());
+        boolean childKept = false;
+        for (Iterator<TreeItem<Category>> it = node.getChildren().iterator(); it.hasNext(); ) {
+            if (prune(it.next(), kw, keepIds)) childKept = true;
+            else it.remove();
+        }
+        return selfKeep || childKept;
+    }
+
+    /** 从当前选中节点一路向上的 ID 集合，保证筛选时这条分支不会被剪掉。 */
+    private static Set<String> selectionPathIds(TreeItem<Category> root, String id) {
+        Set<String> keep = new LinkedHashSet<>();
+        if (id == null) return keep;
+        TreeItem<Category> hit = findNodeStatic(root, id);
+        for (TreeItem<Category> n = hit; n != null; n = n.getParent()) {
+            if (n.getValue() != null) keep.add(n.getValue().getId());
+        }
+        return keep;
+    }
+
+    private static TreeItem<Category> findNodeStatic(TreeItem<Category> node, String id) {
+        if (node.getValue() != null && node.getValue().getId().equals(id)) return node;
+        for (TreeItem<Category> child : node.getChildren()) {
+            TreeItem<Category> hit = findNodeStatic(child, id);
+            if (hit != null) return hit;
+        }
+        return null;
+    }
+
+    private static void expandAll(TreeItem<Category> node) {
+        node.setExpanded(true);
+        for (TreeItem<Category> child : node.getChildren()) expandAll(child);
+    }
+
+    /** 层级编号：根「全部分类」与回收站不参与编号，真实分类从顶层 0 开始。 */
+    private int depthOf(Category c) {
+        if (c == null) return -1;
+        if (ALL_ID.equals(c.getId()) || TRASH_ID.equals(c.getId())) return -1;
+        int depth = 0;
+        String pid = c.getParentId();
+        int guard = 0;
+        while (pid != null && !pid.isBlank() && guard++ < 32) {
+            Category parent = categoryIndex.get(pid);
+            if (parent == null) break;
+            depth++;
+            pid = parent.getParentId();
+        }
+        return depth;
     }
 
     private Category selectedCategory() {
@@ -331,7 +461,6 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
 
         renameBtn.setDisable(trash);
         moveBtn.setDisable(trash);
-        tagBtn.setDisable(trash);
         privateBtn.setDisable(trash);
 
         restoreBtn.setVisible(trash);
@@ -364,7 +493,9 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
                     ? "回收站内共 " + page.total() + " 项（在此删除将永久销毁）"
                     : "回收站内搜索「" + kw + "」：共 " + page.total() + " 项");
         } else if (!kw.isEmpty()) {
-            statusLabel.setText("全库搜索「" + kw + "」：共 " + page.total() + " 条（已忽略分类筛选）");
+            Category c = selectedCategory();
+            String scope = (c == null || ALL_ID.equals(c.getId())) ? "全库" : "「" + c.getName() + "」（含子分类）";
+            statusLabel.setText(scope + "搜索「" + kw + "」：共 " + page.total() + " 条");
         } else {
             Category c = selectedCategory();
             String scope = (c == null || ALL_ID.equals(c.getId())) ? "全部分类" : c.getName() + "（含子分类）";
@@ -375,9 +506,9 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
     /**
      * 组装查询条件。
      *
-     * <p>一条重要规则：<b>只要输入了关键词，就按全库搜索</b>，不再受左侧分类筛选限制——
-     * 用户输入关键词时想找的是"这份东西在哪"，而不是"当前分类里有没有"。
-     * 回收站是个例外：它本身就是一个明确的范围，在里面搜索仍在回收站内进行。</p>
+     * <p>关键词与分类筛选是<b>叠加</b>关系：先在左侧选中某个分类，再输入关键词，
+     * 只在该分类（含子分类）范围内检索；只有选中「全部分类」时才是全库搜索。
+     * 回收站本身就是一个明确范围，在里面搜索仍在回收站内进行。</p>
      */
     private MaterialQuery buildQuery() {
         MaterialQuery q = new MaterialQuery();
@@ -387,14 +518,16 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
 
         if (trash) {
             q.setOnlyTrashed(true);   // 排序由 MaterialQuery 默认按删除时间倒序
-        } else if (!hasKeyword && c != null && !ALL_ID.equals(c.getId())) {
+        } else if (c != null && !ALL_ID.equals(c.getId())) {
             // 点父分类也要能看到子分类里的材料，所以按整棵子树筛
             q.setCategoryIds(ctx.categoryService().subtreeIds(c.getId()));
         }
 
         int ti = typeFilter.getSelectionModel().getSelectedIndex();
         if (ti > 0) q.setFileType(FileType.values()[ti - 1]);
-        if (privateOnly.isSelected()) q.setOnlyPrivate(true);
+        // 私密材料默认不可见；解锁并勾选「查看私密材料」后取消该过滤，私密与普通材料一起显示
+        boolean showPrivate = privateOnly.isSelected() && ctx.securityService().isUnlocked();
+        q.setOnlyPrivate(showPrivate ? null : Boolean.FALSE);
         if (hasKeyword) q.setKeyword(keywordField.getText().trim());
         return q;
     }
@@ -552,12 +685,186 @@ public class ArchiveView extends BorderPane implements MainWindow.Refreshable {
         d.showAndWait().ifPresent(c -> report(ctx.materialService().moveToCategory(m.getId(), c.getId())));
     }
 
-    private void onTags() {
-        Material m = single();
-        if (m == null) return;
-        String current = m.getTagText() == null ? "" : m.getTagText().replace(" / ", ",");
-        UiKit.prompt("编辑标签", "多个标签用逗号分隔", current)
-                .ifPresent(v -> report(ctx.materialService().setTags(m.getId(), v)));
+    /* ======================== 拖拽移动分类 ======================== */
+
+    /**
+     * 表格 → 分类树 的拖拽移动。
+     *
+     * <p>规则：回收站视图下禁用（软删除状态改分类语义模糊）；投放目标只能是真实分类，
+     * 「全部分类」与「回收站」是伪节点，一律拒绝并在行上给出红色反馈。</p>
+     */
+    private void installDragToCategory() {
+        // ---- 拖拽源：表格中选中的材料 ----
+        table.setOnDragDetected(e -> {
+            if (isTrashView()) return;
+            List<Material> picked = new ArrayList<>();
+            for (Material m : selected()) {
+                if (m != null) picked.add(m);
+            }
+            if (picked.isEmpty()) return;
+
+            Dragboard db = table.startDragAndDrop(TransferMode.MOVE);
+            ClipboardContent content = new ClipboardContent();
+            content.put(MATERIAL_IDS, picked.stream().map(Material::getId).toList());
+            db.setContent(content);
+            db.setDragView(dragPreview(picked), -12, -12);
+            e.consume();
+        });
+
+        // ---- 投放目标：分类树 ----
+        categoryTree.setOnDragOver(e -> {
+            if (!e.getDragboard().hasContent(MATERIAL_IDS)) {
+                e.consume();
+                return;
+            }
+            TreeCell<Category> cell = cellUnder(e);
+            Category target = droppableCategory(cell);
+            highlight(cell, target != null);
+            if (target != null) e.acceptTransferModes(TransferMode.MOVE);
+            e.consume();
+        });
+
+        categoryTree.setOnDragExited(e -> {
+            clearHighlight();
+            e.consume();
+        });
+
+        categoryTree.setOnDragDropped(e -> {
+            TreeCell<Category> cell = cellUnder(e);
+            Category target = droppableCategory(cell);
+            List<String> ids = null;
+            if (target != null && e.getDragboard().getContent(MATERIAL_IDS) instanceof List<?> raw) {
+                ids = raw.stream().map(String::valueOf).toList();
+            }
+            clearHighlight();
+            boolean done = applyMove(target, ids);
+            e.setDropCompleted(done);
+            e.consume();
+        });
+    }
+
+    /** 拖拽时跟随的预览：只显示选中的材料（最多列 3 条），而不是整张表格。 */
+    private Image dragPreview(List<Material> picked) {
+        VBox box = new VBox(2);
+        box.setStyle("-fx-background-color: #ffffff;"
+                + " -fx-padding: 8 12 8 12;"
+                + " -fx-background-radius: 6;"
+                + " -fx-border-color: #2f5597; -fx-border-radius: 6; -fx-border-width: 1;");
+
+        Label title = new Label("移动 " + picked.size() + " 份材料");
+        title.setStyle("-fx-font-weight: bold; -fx-text-fill: #1f3864;");
+        box.getChildren().add(title);
+
+        picked.stream().limit(3).forEach(m -> {
+            Label l = new Label("· " + m.getFileName());
+            l.setStyle("-fx-font-size: 11px; -fx-text-fill: #2b3445;");
+            box.getChildren().add(l);
+        });
+        if (picked.size() > 3) {
+            Label more = new Label("…等 " + picked.size() + " 份");
+            more.setStyle("-fx-font-size: 11px; -fx-text-fill: #7a8699;");
+            box.getChildren().add(more);
+        }
+
+        // 节点不挂进 Scene 就没有字体度量，快照会退化成 1x4 的空图；
+        // 放进临时 Scene 强制跑一次 CSS 与布局，再截图。
+        new Scene(new Group(box));
+        box.applyCss();
+        box.layout();
+
+        SnapshotParameters params = new SnapshotParameters();
+        params.setFill(Color.TRANSPARENT);
+        return box.snapshot(params, null);
+    }
+
+    /** 从鼠标落点反查所在的 TreeCell。 */
+    @SuppressWarnings("unchecked")
+    private static TreeCell<Category> cellUnder(DragEvent e) {
+        Node n = e.getPickResult().getIntersectedNode();
+        while (n != null && !(n instanceof TreeCell)) n = n.getParent();
+        return n instanceof TreeCell ? (TreeCell<Category>) n : null;
+    }
+
+    /** 只允许投放到真实分类；伪节点（全部分类 / 回收站）与空行返回 null。 */
+    private Category droppableCategory(TreeCell<Category> cell) {
+        if (cell == null || cell.isEmpty() || cell.getTreeItem() == null) return null;
+        Category c = cell.getTreeItem().getValue();
+        if (c == null) return null;
+        String id = c.getId();
+        if (ALL_ID.equals(id) || TRASH_ID.equals(id)) return null;
+        return c;
+    }
+
+    /** 拖拽悬停时的行反馈：合法目标浅蓝，非法目标浅红。 */
+    private void highlight(TreeCell<Category> cell, boolean legal) {
+        if (dropHighlight != null && dropHighlight != cell) restoreCellStyle(dropHighlight);
+        dropHighlight = cell;
+        if (cell == null || cell.getTreeItem() == null || cell.getTreeItem().getValue() == null) return;
+        String bg = legal ? "#eaf2ff" : "#fdecea";
+        cell.setStyle("-fx-background-color:" + bg + "; -fx-text-fill:"
+                + UiKit.depthColor(depthOf(cell.getTreeItem().getValue())) + ";");
+    }
+
+    private void clearHighlight() {
+        if (dropHighlight != null) {
+            restoreCellStyle(dropHighlight);
+            dropHighlight = null;
+        }
+    }
+
+    /** 复原行样式（高亮时整行内联样式被覆盖，需要把文字颜色写回去）。 */
+    private void restoreCellStyle(TreeCell<Category> cell) {
+        Category c = cell.getTreeItem() == null ? null : cell.getTreeItem().getValue();
+        cell.setStyle(c == null ? "" : "-fx-text-fill:" + UiKit.depthColor(depthOf(c)) + ";");
+    }
+
+    /** 落位：逐条移动并刷新列表，返回是否至少成功一条。 */
+    private boolean applyMove(Category target, List<String> ids) {
+        if (target == null || ids == null || ids.isEmpty()) return false;
+        int moved = 0;
+        for (String id : ids) {
+            if (ctx.materialService().moveToCategory(id, target.getId()).isSuccess()) moved++;
+        }
+        if (moved == 0) {
+            statusLabel.setText("未能移动：材料可能已在「" + target.getName() + "」中");
+            return false;
+        }
+        refresh();   // 先刷新，否则 reload() 会把这条提示覆盖掉
+        statusLabel.setText("已把 " + moved + " 份材料移动到「" + target.getName() + "」");
+        return true;
+    }
+
+    /**
+     * 「查看私密材料」开关。
+     *
+     * <p>勾选必须先通过安全密钥验证；取消勾选立即重新上锁（派生密钥从内存清零）。
+     * 未解锁时私密材料在档案页完全不出现——由 {@link #buildQuery()} 默认排除私密材料保证。</p>
+     */
+    private void onTogglePrivateView() {
+        if (!privateOnly.isSelected()) {
+            exitPrivateView();
+            reload();
+            statusLabel.setText("已退出私密视图，私密材料不再显示");
+            return;
+        }
+        if (!ctx.securityService().isEnabled()) {
+            privateOnly.setSelected(false);
+            UiKit.warn("尚未设置安全密钥，请先到「我的」页设置后再查看私密材料");
+            return;
+        }
+        if (!PrivateUnlockDialog.ensureUnlocked(ctx)) {
+            privateOnly.setSelected(false);
+            reload();
+            return;
+        }
+        reload();
+        statusLabel.setText("私密空间已解锁：私密材料已一并显示，取消勾选将重新上锁");
+    }
+
+    /** 退出私密视图：取消勾选并立即锁定。 */
+    private void exitPrivateView() {
+        if (privateOnly.isSelected()) privateOnly.setSelected(false);
+        if (ctx.securityService().isUnlocked()) ctx.securityService().lock();
     }
 
     private void onTogglePrivate() {

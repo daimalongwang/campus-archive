@@ -15,7 +15,6 @@ public class MaterialQuery {
     /** 按分类子树筛选；null 表示不按分类过滤（例如全库搜索）。 */
     private List<String> categoryIds;
     private FileType fileType;
-    private String tag;
     private Boolean onlyPrivate;
     private LocalDateTime createdFrom;
     private LocalDateTime createdTo;
@@ -45,9 +44,6 @@ public class MaterialQuery {
     public FileType getFileType() { return fileType; }
     public MaterialQuery setFileType(FileType fileType) { this.fileType = fileType; return this; }
 
-    public String getTag() { return tag; }
-    public MaterialQuery setTag(String tag) { this.tag = tag; return this; }
-
     public Boolean getOnlyPrivate() { return onlyPrivate; }
     public MaterialQuery setOnlyPrivate(Boolean onlyPrivate) { this.onlyPrivate = onlyPrivate; return this; }
 
@@ -72,10 +68,6 @@ public class MaterialQuery {
     /** 派生 getter，供 MyBatis OGNL 以 q.keywordLike 形式引用。 */
     public String getKeywordLike() {
         return keyword == null || keyword.isBlank() ? null : "%" + keyword.trim() + "%";
-    }
-
-    public String getTagLike() {
-        return tag == null || tag.isBlank() ? null : "%" + tag.trim() + "%";
     }
 
     /**

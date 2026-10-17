@@ -46,7 +46,6 @@ public class SearchServiceImpl implements SearchService {
         out.put("total", repos.query(d -> d.material().countActive()));
         out.put("privateCount", repos.query(d -> d.material().countPrivate()));
         out.put("trashed", repos.query(d -> d.material().listTrashed().size()));
-        out.put("pendingSchedules", repos.query(d -> d.schedule().countPending()));
         out.put("byCategory", repos.query(d -> d.material().countByCategory()));
         return out;
     }

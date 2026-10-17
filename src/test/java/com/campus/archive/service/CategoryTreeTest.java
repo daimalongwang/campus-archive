@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * <p>两条核心规则：</p>
  * <ol>
  *   <li>点父分类要能看到子分类里的材料——筛选按<b>整棵子树</b>生效；</li>
- *   <li>输入关键词时<b>忽略分类筛选</b>，因为用户想找的是"这份东西在哪"，而不是"当前分类里有没有"。</li>
+ *   <li>关键词与分类筛选叠加，不再跨分类命中。</li>
  * </ol>
  * <p>删除分类必须保证材料不悬空，因此每个删除路径都要验一遍材料去向。</p>
  */
@@ -51,7 +51,7 @@ class CategoryTreeTest {
     private String uploadTo(String categoryId, String fileName) {
         File f = TestEnv.sample(staging, fileName, "内容 " + fileName + " " + System.nanoTime());
         var r = ctx.materialService().upload(List.of(f),
-                new UploadOptions().setSuggestCategory(false).setCategoryId(categoryId));
+                new UploadOptions().setCategoryId(categoryId));
         assertEquals(1, r.getData().getSuccessCount());
         return ctx.searchService().search(new MaterialQuery(), 1, 100).items().stream()
                 .filter(m -> m.getFileName().equals(fileName)).findFirst().orElseThrow().getId();
@@ -173,23 +173,22 @@ class CategoryTreeTest {
     }
 
     @Test
-    @DisplayName("I. 关键词搜索忽略分类筛选，覆盖全库")
-    void keywordSearchIgnoresCategoryScope() {
+    @DisplayName("I. 关键词搜索与分类筛选叠加，不再跨分类命中")
+    void keywordSearchRespectsCategoryScope() {
         String cert = cat("证书");
         String contest = cat("竞赛");
         uploadTo(cert, "数学建模证书-甲.pdf");
         uploadTo(contest, "数学建模证书-乙.pdf");
 
-        // 不带关键词：受分类筛选影响
-        assertEquals(1, ctx.searchService().search(
-                new MaterialQuery().setCategoryIds(ctx.categoryService().subtreeIds(cert)), 1, 50).total());
-
-        // 带关键词 + 同样的分类筛选：应被忽略，两份都能搜到
-        MaterialQuery q = new MaterialQuery()
+        // 关键词 + 分类：只在「证书」子树内检索，不应命中「竞赛」里的同名材料
+        MaterialQuery scoped = new MaterialQuery()
                 .setCategoryIds(ctx.categoryService().subtreeIds(cert))
                 .setKeyword("数学建模");
-        q.setCategoryIds(null);   // 界面在有关键词时不会设置分类条件
-        assertEquals(2, ctx.searchService().search(q, 1, 50).total(),
-                "全库搜索应该同时命中其他分类里的同名材料");
+        assertEquals(1, ctx.searchService().search(scoped, 1, 50).total(),
+                "关键词搜索应受分类筛选约束");
+
+        // 不限定分类时才覆盖全库
+        assertEquals(2, ctx.searchService().search(
+                new MaterialQuery().setKeyword("数学建模"), 1, 50).total());
     }
 }

@@ -2,194 +2,156 @@ package com.campus.archive.ui;
 
 import com.campus.archive.config.AppContext;
 import com.campus.archive.dto.Result;
-import com.campus.archive.dto.Suggestion;
 import com.campus.archive.dto.UploadOptions;
 import com.campus.archive.dto.UploadSummary;
 import com.campus.archive.entity.Category;
 import javafx.application.Platform;
-import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
-import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.*;
-import javafx.scene.layout.*;
-import javafx.stage.FileChooser;
-import javafx.stage.Window;
+import javafx.scene.layout.VBox;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
- * 上传对话框。这里同时是<b>设计模式 ① 策略模式</b>的可视化演示点：
- * 切换"归类建议方式"下拉框即可在运行期替换算法，下方每个文件的建议文本会立即重算，
- * 而 {@code MaterialService} 与数据层完全不需要改动。
+ * 上传对话框：把<b>一批</b>材料放进<b>同一个</b>分类。
+ *
+ * <p>可以一次选多个文件，但不能分别指定分类——这是刻意的取舍：
+ * 常见场景是"一次把某个学期的证书全传进去"，逐个挑分类反而更慢。</p>
+ *
+ * <p>分类树复用档案页的结构并全部展开；除缩进外在名称前显示层级徽标（顶层 0，逐层 +1，不同层级不同底色）。</p>
  */
 public class UploadDialog extends Dialog<Void> {
 
     private final AppContext ctx;
+    private final List<File> files;
+    private final TreeView<Category> categoryTree = new TreeView<>();
     private final ListView<String> fileList = new ListView<>();
-    private final List<File> files = new ArrayList<>();
-    private final List<Suggestion> suggestions = new ArrayList<>();
-    private final ComboBox<String> strategyBox = new ComboBox<>();
-    private final ComboBox<String> categoryBox = new ComboBox<>();
-    private final CheckBox useSuggestion = new CheckBox("使用智能建议（自动分类与规范化命名）");
-    private final TextField tagField = new TextField();
     private final ProgressBar progress = new ProgressBar(0);
-    private final Label status = UiKit.label("尚未选择文件", "muted");
+    private final Label status = UiKit.label("请选择存放分类", "muted");
 
-    public UploadDialog(AppContext ctx) {
+    private Node uploadButton;
+
+    public UploadDialog(AppContext ctx, List<File> files) {
         this.ctx = ctx;
+        this.files = List.copyOf(files);
+
         setTitle("上传材料");
-        setHeaderText("选择文件后会给出分类与命名建议，你也可以完全跳过，直接保存");
+        setHeaderText("这 " + this.files.size() + " 个文件将一起存入同一个分类");
         setResizable(true);
 
-        ButtonType uploadType = new ButtonType("开始上传", ButtonBar.ButtonData.OK_DONE);
+        ButtonType uploadType = new ButtonType("上传", ButtonBar.ButtonData.OK_DONE);
         getDialogPane().getButtonTypes().addAll(uploadType, ButtonType.CANCEL);
-        getDialogPane().setPrefWidth(720);
+        getDialogPane().setPrefWidth(560);
+        UiKit.styleDialog(this);
 
         build();
-        getDialogPane().getButtonTypes().stream()
-                .filter(b -> b.getButtonData() == ButtonBar.ButtonData.OK_DONE)
-                .findFirst()
-                .ifPresent(b -> {
-                    Node node = getDialogPane().lookupButton(b);
-                    node.addEventFilter(javafx.event.ActionEvent.ACTION, ev -> {
-                        if (files.isEmpty()) {
-                            UiKit.warn("请先选择要上传的文件");
-                            ev.consume();
-                            return;
-                        }
-                        ev.consume();
-                        doUpload();
-                    });
-                });
+
+        uploadButton = getDialogPane().lookupButton(uploadType);
+        uploadButton.setDisable(true);
+        uploadButton.addEventFilter(javafx.event.ActionEvent.ACTION, ev -> {
+            ev.consume();
+            if (selectedCategory() != null) doUpload();
+        });
     }
 
     private void build() {
-        // ---- 策略选择（模式 ①）----
-        strategyBox.setItems(FXCollections.observableArrayList(ctx.materialService().availableSuggestionStrategies()));
-        strategyBox.getSelectionModel().select(ctx.materialService().currentSuggestionStrategy());
-        strategyBox.setOnAction(e -> {
-            ctx.materialService().useSuggestionStrategy(strategyBox.getValue());
-            recomputeSuggestions();
-        });
-
-        categoryBox.getItems().add("按建议自动分类");
-        for (Category c : ctx.repos().query(d -> d.category().findAll())) {
-            categoryBox.getItems().add(c.getName());
+        for (File f : files) {
+            fileList.getItems().add("  " + f.getName() + "    " + humanSize(f.length()));
         }
-        categoryBox.getSelectionModel().selectFirst();
+        fileList.setPrefHeight(Math.min(150, 34 + files.size() * 26));
 
-        useSuggestion.setSelected(true);
-        useSuggestion.setOnAction(e -> {
-            strategyBox.setDisable(!useSuggestion.isSelected());
-            recomputeSuggestions();
+        categoryTree.setPrefHeight(260);
+        categoryTree.setShowRoot(false);
+        categoryTree.setCellFactory(v -> new TreeCell<>() {
+            @Override
+            protected void updateItem(Category item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    setGraphic(null);
+                    setStyle("");
+                    return;
+                }
+                int depth = depthOf(getTreeItem());
+                // 与档案页保持一致：层级数字 + 名称，按层级上色，文字交给 skin 绘制
+                setText(UiKit.depthText(depth, item.getName()));
+                setGraphic(null);
+                setStyle("-fx-text-fill:" + UiKit.depthColor(depth) + ";");
+            }
         });
-
-        tagField.setPromptText("可选：标签，多个用逗号分隔，例如：四级,求职");
-
-        Button choose = new Button("选择文件…");
-        choose.getStyleClass().addAll("button", "primary-button");
-        choose.setOnAction(e -> chooseFiles());
-        Button clear = new Button("清空");
-        clear.getStyleClass().addAll("button", "ghost-button");
-        clear.setOnAction(e -> {
-            files.clear();
-            suggestions.clear();
-            fileList.getItems().clear();
-            status.setText("尚未选择文件");
+        categoryTree.getSelectionModel().selectedItemProperty().addListener((obs, old, sel) -> {
+            boolean none = sel == null;
+            if (uploadButton != null) uploadButton.setDisable(none);
+            status.setText(none ? "请选择存放分类" : "将存入：" + sel.getValue().getName());
         });
-
-        HBox chooseRow = new HBox(8, choose, clear, status);
-        chooseRow.setAlignment(Pos.CENTER_LEFT);
-
-        Label patternHint = UiKit.label("策略模式①：归类建议算法可在运行期替换，切换后立即重算下方建议",
-                "pattern-badge");
-
-        GridPane form = new GridPane();
-        form.setHgap(10);
-        form.setVgap(10);
-        form.add(new Label("归类建议方式"), 0, 0);
-        form.add(strategyBox, 1, 0);
-        form.add(new Label("目标分类"), 2, 0);
-        form.add(categoryBox, 3, 0);
-        form.add(new Label("标签"), 0, 1);
-        form.add(tagField, 1, 1, 3, 1);
-        ColumnConstraints c0 = new ColumnConstraints();
-        c0.setMinWidth(96);
-        ColumnConstraints c1 = new ColumnConstraints();
-        c1.setHgrow(Priority.ALWAYS);
-        ColumnConstraints c2 = new ColumnConstraints();
-        c2.setMinWidth(66);
-        ColumnConstraints c3 = new ColumnConstraints();
-        c3.setHgrow(Priority.ALWAYS);
-        form.getColumnConstraints().addAll(c0, c1, c2, c3);
-
-        fileList.setPrefHeight(230);
-        fileList.setPlaceholder(UiKit.label("还没有选择文件", "muted"));
+        rebuildTree();
 
         progress.setPrefWidth(Double.MAX_VALUE);
         progress.setVisible(false);
         progress.setManaged(false);
 
-        VBox box = new VBox(12, chooseRow, patternHint, form, useSuggestion, fileList, progress);
-        box.setPadding(new Insets(6, 4, 4, 4));
+        VBox box = new VBox(8,
+                UiKit.label("待上传文件（" + files.size() + " 个）", "card-title"),
+                fileList,
+                UiKit.label("存放分类（本批全部存入所选分类，顶层为 0）", "card-title"),
+                categoryTree,
+                progress,
+                status);
+        box.setPadding(new Insets(4));
         getDialogPane().setContent(box);
     }
 
-    private void chooseFiles() {
-        FileChooser fc = new FileChooser();
-        fc.setTitle("选择要归档的材料（可多选）");
-        fc.getExtensionFilters().addAll(
-                new FileChooser.ExtensionFilter("常见材料格式", "*.pdf", "*.doc", "*.docx", "*.png", "*.jpg", "*.jpeg", "*.xls", "*.xlsx"),
-                new FileChooser.ExtensionFilter("全部文件", "*.*"));
-        Window owner = getDialogPane().getScene() == null ? null : getDialogPane().getScene().getWindow();
-        List<File> picked = fc.showOpenMultipleDialog(owner);
-        if (picked == null || picked.isEmpty()) return;
-
-        int accepted = 0;
-        for (File f : picked) {
-            if (f.length() > 200L * 1024 * 1024) {
-                UiKit.warn("「" + f.getName() + "」超过 200 MB，已跳过");
-                continue;
-            }
-            if (files.size() >= 200) {
-                UiKit.warn("一次最多上传 200 个文件，其余请分批处理");
-                break;
-            }
-            files.add(f);
-            accepted++;
+    /** 按档案页的方式重建分类树，并全部展开。 */
+    private void rebuildTree() {
+        List<Category> flat = ctx.categoryService().listAll();
+        Map<String, TreeItem<Category>> nodes = new LinkedHashMap<>();
+        for (Category c : flat) {
+            nodes.put(c.getId(), new TreeItem<>(c));
         }
-        status.setText("已选择 " + files.size() + " 个文件（本次新增 " + accepted + " 个）");
-        recomputeSuggestions();
+
+        TreeItem<Category> root = new TreeItem<>();      // 隐藏的虚拟根，不参与选择
+        for (Category c : flat) {
+            TreeItem<Category> node = nodes.get(c.getId());
+            TreeItem<Category> parent = c.isRoot() ? root : nodes.get(c.getParentId());
+            // 父节点缺失（数据异常）时挂到根上，保证任何分类都可见
+            (parent == null ? root : parent).getChildren().add(node);
+        }
+        expandAll(root);
+        categoryTree.setRoot(root);
     }
 
-    /** 用当前策略为每个文件重算建议，并刷新列表显示。 */
-    private void recomputeSuggestions() {
-        suggestions.clear();
-        fileList.getItems().clear();
-        for (File f : files) {
-            Suggestion s = useSuggestion.isSelected()
-                    ? ctx.materialService().suggest(f)
-                    : Suggestion.NONE;
-            suggestions.add(s);
-            fileList.getItems().add(String.format("  %s    %s", f.getName(), s.displayText()));
+    private static void expandAll(TreeItem<Category> node) {
+        node.setExpanded(true);
+        for (TreeItem<Category> child : node.getChildren()) expandAll(child);
+    }
+
+    /** 层级：顶层为 0（虚拟根的父节点为 null，因此从根的子节点起算）。 */
+    private static int depthOf(TreeItem<Category> item) {
+        if (item == null) return 0;
+        int depth = 0;
+        for (TreeItem<Category> p = item.getParent(); p != null && p.getParent() != null; p = p.getParent()) {
+            depth++;
         }
+        return depth;
+    }
+
+    private Category selectedCategory() {
+        TreeItem<Category> item = categoryTree.getSelectionModel().getSelectedItem();
+        return item == null ? null : item.getValue();
     }
 
     private void doUpload() {
-        UploadOptions opt = new UploadOptions()
-                .setSuggestCategory(useSuggestion.isSelected())
-                .setTags(tagField.getText().isBlank() ? null : tagField.getText().trim());
+        Category cat = selectedCategory();
+        if (cat == null) return;
 
-        int ci = categoryBox.getSelectionModel().getSelectedIndex();
-        if (ci > 0) {
-            // 用户显式指定了目标分类，覆盖策略给出的建议
-            List<Category> cats = ctx.repos().query(d -> d.category().findAll());
-            opt.setCategoryId(cats.get(ci - 1).getId());
-        }
+        UploadOptions opt = new UploadOptions().setCategoryId(cat.getId());
 
+        uploadButton.setDisable(true);
         progress.setVisible(true);
         progress.setManaged(true);
         progress.setProgress(ProgressIndicator.INDETERMINATE_PROGRESS);
@@ -202,6 +164,7 @@ public class UploadDialog extends Dialog<Void> {
                 status.setText("上传结束");
                 if (!r.isSuccess()) {
                     UiKit.error("[" + r.getCode() + "] " + r.getMessage());
+                    uploadButton.setDisable(false);
                     return;
                 }
                 UploadSummary s = r.getData();
@@ -222,5 +185,11 @@ public class UploadDialog extends Dialog<Void> {
         }, "upload-worker");
         worker.setDaemon(true);
         worker.start();
+    }
+
+    private static String humanSize(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
+        return String.format("%.1f MB", bytes / 1024.0 / 1024.0);
     }
 }
